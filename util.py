@@ -14,14 +14,14 @@ def _get_api_key(keyfile=None):
     else:
         raise FileNotFoundError(f'API keyfile {keyfile} not found.')
 
-def _dump_session_key(session_key, keyfile=None):
-    if keyfile.is_file():
+def _dump_session_key(session_key, keyfile=None, refresh=False):
+    if keyfile.is_file() and not refresh:
         raise FileExistsError(f'Session keyfile {keyfile} already exists.')
     else:
         with open(keyfile, 'w') as f:
             return f.write(session_key)
 
-def _login(api_keyfile=None, session_keyfile=None):
+def _login(api_keyfile=None, session_keyfile=None, refresh=False):
     """
     >> u'{"status": "success", "message": "authenticated user: ", "session": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}'
     """
@@ -33,9 +33,19 @@ def _login(api_keyfile=None, session_keyfile=None):
 
     ## Write session key
     session_key = session.session
-    _dump_session_key(session_key, session_keyfile)
+    _dump_session_key(session_key, session_keyfile, refresh=refresh)
 
     return session
+
+def _good_session(session_obj):
+    try:
+        ## Requires login (not all methods do)
+        session_obj.myjobs()
+    except Exception:
+        return False
+    else:
+        return True
+        
 
 def _establish_session(session_keyfile=SESSION_KEYFILE, api_keyfile=API_KEYFILE):
     """
@@ -52,19 +62,37 @@ def _establish_session(session_keyfile=SESSION_KEYFILE, api_keyfile=API_KEYFILE)
         ## Add existing session key
         session.session = session_key
 
+    ## Check if session is actually not working
+    if not _good_session(session):    
+        print('--'*80)
+        print("*** Session Stale ***")
+        ## Redo login
+        session = _login(api_keyfile, session_keyfile, refresh=True)
+        
     return session
 
 def submit_file(filename, **kwds):
 
-    session = _establish_session(**kwds)
+    print("-"*80)
+    print("[Establishing Session]")
+    session = _establish_session()
 
-    return session.upload(filename)
+    print("-"*80)
+    print("[Submitting Image]")
+    try:
+        upload_result = session.upload(filename)
+    except adn.client.RequestError as e:
+        print("<< Launching new session >>")
+        session = _login(refresh=True, **kwds)
+        upload_result = session.upload(filename)
 
+    return upload_result
 
 if __name__ == "__main__":
     import sys
 
     filename = Path(sys.argv[1])
+    print('=='*80)
     print(f'Input File: {filename}')
     
     if filename.is_file():
@@ -75,6 +103,8 @@ if __name__ == "__main__":
 
         ## query job status
         sub_url = f'http://nova.astrometry.net/api/submissions/{subid}'
+
+        ## >>> Wait for results loop goes here <<<<
         res = requests.get(sub_url)
 
         ## if submission has job number, get fits version
@@ -83,3 +113,4 @@ if __name__ == "__main__":
 
         basename = filename.stem
         
+        ### NOT DONE #####
